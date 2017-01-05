@@ -66,7 +66,8 @@ type postgresDataHandler struct {
     dmlArguments            []interface{}
 }
 
-func NewPostgresDataHandler (dbh *sql.DB, tableDetails map[string]interface{}) (pDH postgresDataHandler, err error) {
+func NewPostgresDataHandler (dbh *sql.DB,
+                             tableDetails map[string]interface{}) (pDH postgresDataHandler, err error) {
     if dbh == nil {
         return pDH, errors.New("Invalid database handle provided")
     }

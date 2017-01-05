@@ -11,7 +11,8 @@ import (
     "github.com/satori/go.uuid"
 )
 
-func setKey (dict map[string]interface{}, key string, value interface{}) (rv bool, err error) {
+func setKey ( dict map[string]interface{},
+              key string, value interface{} ) ( rv bool, err error ) {
     rv = true
 
     if dict == nil {
@@ -29,7 +30,9 @@ func setKey (dict map[string]interface{}, key string, value interface{}) (rv boo
     return rv, err
 }
 
-func updatefieldList ( fieldDef map[string]interface{}, require_an_optional *bool, fieldFilter map[string]interface{} ) {
+func updatefieldList ( fieldDef map[string]interface{},
+                       require_an_optional *bool,
+                       fieldFilter map[string]interface{} ) {
     if v, ok :=  fieldDef["require_an_optional"]; ok {
         *require_an_optional = v.(bool)
     }
@@ -40,7 +43,8 @@ func updatefieldList ( fieldDef map[string]interface{}, require_an_optional *boo
     }
 }
 
-func processRequiredFields ( subsectionName string, required_fields map[string]interface{} ) ( err error ) {
+func processRequiredFields ( subsectionName string,
+                             required_fields map[string]interface{} ) ( err error ) {
 
     delete(required_fields, "_comment")
 
@@ -48,7 +52,8 @@ func processRequiredFields ( subsectionName string, required_fields map[string]i
         _, ok := required_fields[v]
         if !ok {
             fmt.Println(required_fields)
-            return errors.New("Both 'all' and 'initial' must be defined in "+subsectionName+": missing "+v)
+            return errors.New("Both 'all' and 'initial' must be defined in "+
+                              subsectionName+": missing "+v)
         }
     }
 
@@ -106,7 +111,8 @@ func processRequiredFields ( subsectionName string, required_fields map[string]i
 func processLegend ( subsectionName string, legend map[string]interface{} ) ( err error ) {
     for fieldName, _typeDefinition := range legend {
         if reflect.TypeOf(_typeDefinition).Kind() != reflect.Map {
-            return errors.New("Invalid type definition map for field "+fieldName+" in section "+subsectionName)
+            return errors.New("Invalid type definition map for field "+fieldName+
+                              " in section "+subsectionName)
         }
 
         typeDefinition := _typeDefinition.(map[string]interface{})
@@ -131,25 +137,31 @@ func processLegend ( subsectionName string, legend map[string]interface{} ) ( er
                 if _, ok := typeDefinition["sub_type"]; ok {
                     foundField = true
                     if reflect.TypeOf(typeDefinition["sub_type"]).Kind() != reflect.Map {
-                        return errors.New("'sub_type' was not specified as a hashmap in field "+fieldName+" in "+subsectionName)
+                        return errors.New("'sub_type' was not specified as a hashmap in field "+
+                                          fieldName+" in "+subsectionName)
                     }
                 } else if _, ok := typeDefinition["introspect"]; ok {
                     foundField = true
-                    if value, ok := typeDefinition["additional_validation"]; !ok || reflect.TypeOf(value).Kind() != reflect.String {
-                        return errors.New("'introspect' specified with invalid 'additional_validation' in field "+fieldName+" in "+subsectionName)
+                    if value, ok := typeDefinition["additional_validation"];
+                       !ok || reflect.TypeOf(value).Kind() != reflect.String {
+                        return errors.New("'introspect' specified with invalid 'additional_validation' "+
+                                          "in field "+fieldName+" in "+subsectionName)
                     }
                 }
 
                 if !foundField {
-                    return errors.New("'sub_type' or 'introspect' must be specified for field "+fieldName+" in "+subsectionName)
+                    return errors.New("'sub_type' or 'introspect' must be specified for field "+
+                                      fieldName+" in "+subsectionName)
                 }
             case "hashmap":
                 typeDefinition["type"] = reflect.Map
             default:
-                return errors.New("Unhandled validation type "+fieldType.(string)+" in "+fieldName+" in section "+subsectionName)
+                return errors.New("Unhandled validation type "+fieldType.(string)+" in "+fieldName+
+                                  " in section "+subsectionName)
         }
 
-        if st, ok := typeDefinition["sub_type"]; ok && (typeDefinition["type"] == reflect.Slice || typeDefinition["type"] == reflect.Map) {
+        if st, ok := typeDefinition["sub_type"];
+           ok && (typeDefinition["type"] == reflect.Slice || typeDefinition["type"] == reflect.Map) {
             err = parseSubSection( fieldName, st.(map[string]interface{}) )
             if err != nil {
                 return err
@@ -188,7 +200,8 @@ func InitSchema ( schema map[string]interface{} ) ( err error ) {
     return parseSubSection("root", schema)
 }
 
-func ValidateWithSchema ( input map[string]interface{}, schema map[string]interface{}, action string ) ( err error ) {
+func ValidateWithSchema ( input map[string]interface{},
+                          schema map[string]interface{}, action string ) ( err error ) {
     reqFields := schema["required_fields"].(map[string]interface{})
 
     var requiredFields []string
@@ -212,7 +225,8 @@ func ValidateWithSchema ( input map[string]interface{}, schema map[string]interf
     return err
 }
 
-func ValidateWithLegend ( input map[string]interface{}, legend map[string]interface{}, action string ) ( err error ) {
+func ValidateWithLegend ( input map[string]interface{},
+                          legend map[string]interface{}, action string ) ( err error ) {
     for inputKey, inputValue := range input {
         validationMethod, ok := legend[inputKey].(map[string]interface{})
         if !ok {
@@ -228,7 +242,8 @@ func ValidateWithLegend ( input map[string]interface{}, legend map[string]interf
             return errors.New("'type' not defined for key "+inputKey)
         }
 
-        // Any field that is allowed to be 'null' can be handled without checking type
+        // Any field that is allowed to be 'null' and whoes value is null
+        // can be handled without checking type
         nullOk := false
         if val, ok := validationMethod["null_ok"]; ok && reflect.TypeOf(val).Kind() == reflect.Bool {
             nullOk = val.(bool)
@@ -259,21 +274,76 @@ func ValidateWithLegend ( input map[string]interface{}, legend map[string]interf
                                 }
                                 inputValue = uuidValue
                             default:
-                                log.Println("Unknown additional validation type "+addtnlValidation.(string))
+                                log.Println("Unknown additional validation type "+
+                                            addtnlValidation.(string))
                         }
                     } else if reflect.TypeOf(addtnlValidation).Kind() == reflect.Map {
-                        list, ok := (addtnlValidation.(map[string]interface{}))["enum"]
+                        enum_list, ok := (addtnlValidation.(map[string]interface{}))["enum"]
                         if ok {
                             valueFound := false
                             strlist := []string{}
-                            for _, v := range list.([]interface{}) {
+                            for _, v := range enum_list.([]interface{}) {
                                 strlist = append(strlist, v.(string))
                                 if inputValue.(string) == v.(string) {
                                     valueFound = true
                                 }
                             }
                             if !valueFound {
-                                return errors.New("Value for '"+inputKey+"' must be in the list: "+strings.Join(strlist, ", "))
+                                return errors.New("Value for '"+inputKey+"' must be in the list: "+
+                                                    strings.Join(strlist, ", "))
+                            }
+                        }
+
+                        // Need to check for [min,max], [equals], [min,"max"], and ["min",max]
+                        // The string values of "min" and "max" will indicate unbounded lower and upper
+                        size_spec, ok := (addtnlValidation.(map[string]interface{}))["length"].
+                                         ([]interface{})
+                        if ok {
+                            valueLength := float64(len([]rune(inputValue.(string))))
+                            // An exact length
+                            if len(size_spec) == 1 &&
+                               reflect.TypeOf(size_spec[0]).Kind() == reflect.Float64 {
+                                if valueLength != size_spec[0] {
+                                    return errors.New("'"+inputValue.(string)+"' must be exactly "+
+                                                        size_spec[0].(string)+" characters long")
+                                }
+                            // Upper and lower bounds
+                            } else if len(size_spec) == 2 {
+                                lower := size_spec[0]
+                                upper := size_spec[1]
+
+                                lower_t := reflect.TypeOf(lower).Kind()
+                                upper_t := reflect.TypeOf(upper).Kind()
+
+                                // Validation of schema def
+                                if lower_t == reflect.Float64 && upper_t == reflect.Float64 &&
+                                   lower.(float64) >= upper.(float64) {
+                                    return errors.New("Lower bound must be smaller than higher bound")
+                                }
+
+                                if lower_t == reflect.String && lower != "min" {
+                                    return errors.New("Lower bound must be 'min' if it is a string")
+                                }
+
+                                if upper_t == reflect.String && upper != "max" {
+                                    return errors.New("Upper bound must be 'max' if it is a string")
+                                }
+
+                                // Validation of input
+                                if lower_t == reflect.Float64 && valueLength < lower.(float64) {
+                                    return errors.New(inputKey+": '"+inputValue.(string)+
+                                        "' is smaller than min length of "+
+                                        strconv.FormatFloat(lower.(float64), 'f', 0, 64))
+                                }
+
+                                if upper_t == reflect.Float64 && valueLength > upper.(float64) {
+                                    return errors.New(inputKey+": '"+inputValue.(string)+
+                                        "' is larger than max length of "+
+                                        strconv.FormatFloat(upper.(float64), 'f', 0, 64))
+                                }
+                                
+                            } else {
+                                return errors.New("Invalid 'length' specification for string")
                             }
                         }
                     }
@@ -298,7 +368,9 @@ func ValidateWithLegend ( input map[string]interface{}, legend map[string]interf
                 if reflect.TypeOf(inputValue).Kind() != reflect.Map {
                     return errors.New(inputKey+" is not a valid hashmap")
                 }
-                err = ValidateWithSchema(inputValue.(map[string]interface{}), validationMethod["sub_type"].(map[string]interface{}), action)
+                err = ValidateWithSchema(inputValue.(map[string]interface{}),
+                                         validationMethod["sub_type"].(map[string]interface{}),
+                                         action)
                 if err != nil {
                     return err
                 }
@@ -307,14 +379,17 @@ func ValidateWithLegend ( input map[string]interface{}, legend map[string]interf
                     return errors.New(inputKey+" is not a valid array")
                 }
                 if sub_key, ok := validationMethod["sub_type"]; ok {
-                    err = ValidateWithSchema(inputValue.(map[string]interface{}), sub_key.(map[string]interface{}), action)
+                    err = ValidateWithSchema(inputValue.(map[string]interface{}),
+                                             sub_key.(map[string]interface{}),
+                                             action)
                     if err != nil {
                         return err
                     }
                 } else if _, ok := validationMethod["introspect"]; ok {
                 }
             default:
-                return errors.New("Unhandled validation type for "+inputKey+" as "+validationMethod["type"].(reflect.Kind).String())
+                return errors.New("Unhandled validation type for "+inputKey+" as "+
+                                  validationMethod["type"].(reflect.Kind).String())
         }
     }
 
