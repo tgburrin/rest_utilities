@@ -200,22 +200,64 @@ func InitSchema ( schema map[string]interface{} ) ( err error ) {
     return parseSubSection("root", schema)
 }
 
+func ValidatieAnOptionalField ( input map[string]interface{},
+                                fieldDefs map[string]interface{},
+                                requiredFields []string ) ( err error ) {
+    hasOptional := false
+    for k, _ := range fieldDefs {
+        isOptional := true
+
+        for _, rk := range requiredFields {
+            if k == rk {
+                isOptional = false
+            }
+        }
+
+        if isOptional {
+            for ik, _ := range input {
+                if k == ik {
+                    hasOptional = true
+                }
+            }
+        }
+    }
+
+    if !hasOptional {
+        err = errors.New("At least one optional field must be provided")
+    }
+
+    return err
+}
+
 func ValidateWithSchema ( input map[string]interface{},
                           schema map[string]interface{}, action string ) ( err error ) {
     reqFields := schema["required_fields"].(map[string]interface{})
 
     var requiredFields []string
+    var requireOptional bool
+
     if rf, ok := reqFields[action]; ok {
         r := rf.(map[string]interface{})
         requiredFields = r["fields"].([]string)
+        requireOptional = r["require_an_optional"].(bool)
     } else {
         r := reqFields["default"].(map[string]interface{})
         requiredFields = r["fields"].([]string)
+        requireOptional = r["require_an_optional"].(bool)
     }
 
     err = ValidateRequiredFields(input, requiredFields)
     if err != nil {
         return err
+    }
+
+    if requireOptional {
+        err = ValidatieAnOptionalField ( input,
+                                         schema["legend"].(map[string]interface{}),
+                                         requiredFields )
+        if err != nil {
+            return err
+        }
     }
 
     err = ValidateWithLegend(input, schema["legend"].(map[string]interface{}), action)
