@@ -114,3 +114,33 @@ func MakeInvalidMethodResponse (w http.ResponseWriter, input map[string]interfac
     http.Error(w, jsonMsg, 405)
     return err
 }
+
+func MakeInternalErrorResponse (w http.ResponseWriter, input map[string]interface{}) (err error) {
+    jsonMsg, err := formatJsonResponse(input)
+    if err != nil {
+        return err
+    }
+
+    http.Error(w, jsonMsg, 500)
+    return err
+}
+
+func MakeNotImplementedResponse (w http.ResponseWriter, input map[string]interface{}) (err error) {
+    jsonMsg, err := formatJsonResponse(input)
+    if err != nil {
+        return err
+    }
+
+    http.Error(w, jsonMsg, 501)
+    return err
+}
+
+func MakeUnavailableResponse (w http.ResponseWriter, input map[string]interface{}) (err error) {
+    jsonMsg, err := formatJsonResponse(input)
+    if err != nil {
+        return err
+    }
+
+    http.Error(w, jsonMsg, 503)
+    return err
+}

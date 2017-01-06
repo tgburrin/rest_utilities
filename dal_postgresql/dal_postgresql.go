@@ -6,7 +6,7 @@ import (
     "bytes"
     "strings"
     "strconv"
-    _ "reflect"
+    "reflect"
     "database/sql"
     _ "github.com/lib/pq"
 )
@@ -32,6 +32,26 @@ func GetDatabaseHandle (loginDetails map[string]interface{}) (dbh *sql.DB, err e
                     connDetail = append(connDetail, "dbname="+v.(string))
                 case "port":
                     connDetail = append(connDetail, k+"="+strconv.FormatInt(int64(v.(float64)), 10))
+                case "ssl":
+                    var mode string
+                    if reflect.TypeOf(v).Kind() == reflect.Bool {
+                        if v.(bool) == true {
+                            mode = "require"
+                        } else {
+                            mode = "disable"
+                        }
+                    } else if reflect.TypeOf(v).Kind() == reflect.String {
+                        // Not implemented yet
+                        switch v.(string) {
+                            case "strict":
+                            default:
+                                mode = "verify-full" // default unknown string, go with strict
+                        }
+                    }
+
+                    if mode != "" {
+                        connDetail = append(connDetail, "sslmode="+mode)
+                    }
                 default:
                     connDetail = append(connDetail, k+"="+v.(string))
             }
