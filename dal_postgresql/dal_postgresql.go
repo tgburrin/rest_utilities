@@ -11,6 +11,15 @@ import (
     _ "github.com/lib/pq"
 )
 
+func stringIn ( val string, valid []string ) (rv bool) {
+    for _, v := range valid {
+        if v == val {
+            return true
+        }
+    }
+    return false
+}
+
 func GetDatabaseHandle (loginDetails map[string]interface{}) (dbh *sql.DB, err error) {
     var connDetailString string
 
@@ -82,6 +91,7 @@ type postgresDataHandler struct {
     batchSize               uint
     projection              map[string]interface{}
     searchCriteria          map[string]interface{}
+    sortDirection           string
     primaryKey              []string
     dmlType                 string
     dmlStatement            string
@@ -112,9 +122,9 @@ func NewPostgresDataHandler (dbh *sql.DB,
     pDH.projection = make(map[string]interface{})
     pDH.searchCriteria = make(map[string]interface{})
 
-
     pDH.batchSize = pDH.getDefaultBatchSize()
     pDH.Record = make([]interface{},0)
+    pDH.sortDirection = pDH.getDefaultSortDirection()
 
     for _, f := range tableDetails["pk"].([]string) {
         pDH.projection[f] = nil
@@ -124,8 +134,8 @@ func NewPostgresDataHandler (dbh *sql.DB,
     return pDH, err
 }
 
-func (pDH *postgresDataHandler) GetDMLStatement () (dmlstm string, dmlarg []interface{}) {
-    return pDH.dmlStatement, pDH.dmlArguments
+func (pDH *postgresDataHandler) getDefaultSortDirection () (rv string) {
+    return "desc"
 }
 
 func (pDH *postgresDataHandler) getDefaultBatchSize () (rv uint) {
@@ -150,6 +160,10 @@ func (pDH *postgresDataHandler) checkPrimaryKey () (err error) {
     return err
 }
 
+func (pDH *postgresDataHandler) GetDMLStatement () (dmlstm string, dmlarg []interface{}) {
+    return pDH.dmlStatement, pDH.dmlArguments
+}
+
 func (pDH *postgresDataHandler) SetBatchSize (b uint) {
     if b == 0 {
         pDH.batchSize = pDH.getDefaultBatchSize()
@@ -165,6 +179,7 @@ func (pDH *postgresDataHandler) SetProjection (fieldList []string) {
 }
 
 func (pDH *postgresDataHandler) SetFindCriteria (findKeys map[string]interface{}) (err error) {
+    // Ensure a keyed search.  For now we'll restrict this to primary key specifically.
     for _, pkf := range pDH.primaryKey {
         if _, ok := findKeys[pkf]; !ok {
             return errors.New("Primary key field "+pkf+" is missing")
@@ -180,15 +195,17 @@ func (pDH *postgresDataHandler) FindRecord (args... string) (err error) {
         return errors.New("Record is already staged for "+pDH.dmlType)
     }
 
-    order_direction := "desc"
-
     return_many := false
     for _, flag := range args {
         switch flag {
             case "return_many":
                 return_many = true
             case "reverse_sort":
-                order_direction = "asc"
+                if pDH.sortDirection == "desc" {
+                    pDH.sortDirection = "asc"
+                } else {
+                    pDH.sortDirection = "desc"
+                }
         }
     }
 
@@ -218,9 +235,17 @@ func (pDH *postgresDataHandler) FindRecord (args... string) (err error) {
 
         pc := int64(1)
         for k, v := range pDH.searchCriteria {
-            placeholders = append(placeholders, k+"=$"+strconv.FormatInt(pc,10))
-            pDH.dmlArguments = append(pDH.dmlArguments, v)
-            pc += 1
+            if reflect.TypeOf(v).Kind() == reflect.Slice {
+                if len(v.([]interface{})) == 2 && stringIn((v.([]interface{}))[0].(string), []string{"<","<=","=>",">"}) {
+                    fmt.Println(v)
+                } else if len(v.([]interface{})) == 3 && stringIn((v.([]interface{}))[0].(string), []string{"between","<betweeen","between>","<between>"}) {
+                    fmt.Println(v)
+                }
+            } else {
+                placeholders = append(placeholders, k+"=$"+strconv.FormatInt(pc,10))
+                pDH.dmlArguments = append(pDH.dmlArguments, v)
+                pc += 1
+            }
         }
 
         statement.WriteString(strings.Join(placeholders, " and "))
@@ -229,7 +254,7 @@ func (pDH *postgresDataHandler) FindRecord (args... string) (err error) {
     // Process ordering crit
     statement.WriteString(" order by")
     for _, field := range pDH.primaryKey {
-        statement.WriteString(" "+field+" "+order_direction)
+        statement.WriteString(" "+field+" "+pDH.sortDirection)
     }
 
     statement.WriteString(" limit "+fmt.Sprint(pDH.batchSize+1))
