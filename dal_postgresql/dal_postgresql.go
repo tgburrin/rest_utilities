@@ -81,14 +81,14 @@ func GetDatabaseHandle (loginDetails map[string]interface{}) (dbh *sql.DB, err e
 
 type postgresDataHandler struct {
     Id                      map[string]interface{}
-    NumAffectedLastOp       uint
+    NumAffectedLastOp       int64
     RecordNextIdx           map[string]interface{}
     RecordLastOp            map[string]interface{}
     Record                  []interface{}
 
     dbh                     *sql.DB
     tableName               string
-    batchSize               uint
+    batchSize               int64
     projection              map[string]interface{}
     searchCriteria          map[string]interface{}
     sortDirection           string
@@ -138,7 +138,7 @@ func (pDH *postgresDataHandler) getDefaultSortDirection () (rv string) {
     return "desc"
 }
 
-func (pDH *postgresDataHandler) getDefaultBatchSize () (rv uint) {
+func (pDH *postgresDataHandler) getDefaultBatchSize () (rv int64) {
     return 1000
 }
 
@@ -164,7 +164,7 @@ func (pDH *postgresDataHandler) GetDMLStatement () (dmlstm string, dmlarg []inte
     return pDH.dmlStatement, pDH.dmlArguments
 }
 
-func (pDH *postgresDataHandler) SetBatchSize (b uint) {
+func (pDH *postgresDataHandler) SetBatchSize (b int64) {
     if b == 0 {
         pDH.batchSize = pDH.getDefaultBatchSize()
     } else {
@@ -270,7 +270,7 @@ func (pDH *postgresDataHandler) FindRecord (args... string) (err error) {
     columns, _ := rows.Columns()
     count := len(columns)
 
-    counter := uint(0)
+    counter := int64(0)
     for rows.Next() {
         values := make([]interface{}, count)
         valuePtrs := make([]interface{}, count)
@@ -343,7 +343,7 @@ func (pDH *postgresDataHandler) ExecuteProc ( procName string,
     columns, _ := rows.Columns()
     count := len(columns)
 
-    counter := uint(0)
+    counter := int64(0)
     for rows.Next() {
         values := make([]interface{}, count)
         valuePtrs := make([]interface{}, count)
@@ -393,14 +393,90 @@ func (pDH *postgresDataHandler) UpdateRecord ( replacement map[string]interface{
         return err
     }
 
+    if replacement == nil || len(replacement) == 0 {
+        return errors.New("A replacement must be provided to update")
+    }
+
+    statement := bytes.NewBufferString("update "+pDH.tableName+" set\n    ")
+
+    update_placeholders := []string{}
+    pc := int64(1)
+
+    for k, v := range replacement {
+        if reflect.TypeOf(v).Kind() == reflect.Slice {
+            // TODO handle things like increments ( field = field + 1 ) and the like
+        } else {
+            update_placeholders = append(update_placeholders, k+"=$"+strconv.FormatInt(pc,10))
+            pDH.dmlArguments = append(pDH.dmlArguments, v)
+            pc += 1
+        }
+    }
+
+    find_placeholders := []string{}
+    for k, v := range pDH.searchCriteria {
+        if reflect.TypeOf(v).Kind() == reflect.Slice {
+            // TODO filtering crit
+        } else {
+            find_placeholders = append(find_placeholders, k+"=$"+strconv.FormatInt(pc,10))
+            pDH.dmlArguments = append(pDH.dmlArguments, v)
+            pc += 1
+        }
+    }
+
+    statement.WriteString(strings.Join(update_placeholders, ",\n    "))
+    statement.WriteString("\nwhere\n    ")
+    statement.WriteString(strings.Join(find_placeholders, "\nand "))
+
+    pDH.dmlStatement = statement.String()
+
+    res, err := pDH.dbh.Exec(pDH.dmlStatement, pDH.dmlArguments...)
+    if err != nil {
+        return err
+    }
+
+    if pDH.NumAffectedLastOp, err = res.RowsAffected(); err != nil {
+        return err
+    }
+
     return err
 }
 
 // Allow deletion of a single record
 func (pDH *postgresDataHandler) DeleteRecord ( args... string ) (err error) {
+    // Allow only one to be deleted at the moment
     if err := pDH.checkPrimaryKey(); err != nil {
         return err
-    }   
+    }
+
+    // We could have this return the deleted record
+    statement := bytes.NewBufferString("delete from "+pDH.tableName+"\nwhere\n    ")
+    placeholders := []string{}
+    pc := int64(1)
+
+    // This can contain additional filtering criteria beyond the primary key
+    for k, v := range pDH.searchCriteria {
+        if reflect.TypeOf(v).Kind() == reflect.Slice {
+            // TODO
+        } else {
+            placeholders = append(placeholders, k+"=$"+strconv.FormatInt(pc,10))
+            pDH.dmlArguments = append(pDH.dmlArguments, v)
+            pc += 1
+        }
+    }
+
+    statement.WriteString(strings.Join(placeholders, "\nand "))
+
+    pDH.dmlStatement = statement.String()
+    fmt.Println(pDH.dmlStatement)
+
+    res, err := pDH.dbh.Exec(pDH.dmlStatement, pDH.dmlArguments...)
+    if err != nil {
+        return err
+    }
+
+    if pDH.NumAffectedLastOp, err = res.RowsAffected(); err != nil {
+        return err
+    }
 
     return err
 }
@@ -453,7 +529,7 @@ func (pDH *postgresDataHandler) InsertRecord (record map[string]interface{}, arg
 
         var row map[string]interface{}
 
-        counter := uint(0)
+        counter := int64(0)
         for rows.Next() {
             values := make([]interface{}, count)
             valuePtrs := make([]interface{}, count)
