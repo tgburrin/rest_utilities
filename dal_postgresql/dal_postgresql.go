@@ -72,12 +72,14 @@ func GetDatabaseHandle (loginDetails map[string]interface{}) (dbh *sql.DB, err e
 
 type postgresDataHandler struct {
     Id                      map[string]interface{}
-    NumAffectedLastOp       int
+    NumAffectedLastOp       uint
+    RecordNextIdx           map[string]interface{}
     RecordLastOp            map[string]interface{}
-    Record                  map[string]interface{}
+    Record                  []interface{}
 
     dbh                     *sql.DB
     tableName               string
+    batchSize               uint
     projection              map[string]interface{}
     searchCriteria          map[string]interface{}
     primaryKey              []string
@@ -96,8 +98,8 @@ func NewPostgresDataHandler (dbh *sql.DB,
         return pDH, errors.New("Invalid tableDetails provided")
     }
 
-    if _, ok := tableDetails["tableName"]; !ok {
-        return pDH, errors.New("tableName must be provided")
+    if _, ok := tableDetails["table_name"]; !ok {
+        return pDH, errors.New("table_name must be provided")
     }
 
     if _, ok := tableDetails["pk"]; !ok {
@@ -106,10 +108,13 @@ func NewPostgresDataHandler (dbh *sql.DB,
 
     pDH = postgresDataHandler{}
     pDH.dbh = dbh
-    pDH.NumAffectedLastOp = -1
-    pDH.tableName = tableDetails["tableName"].(string)
+    pDH.tableName = tableDetails["table_name"].(string)
     pDH.projection = make(map[string]interface{})
     pDH.searchCriteria = make(map[string]interface{})
+
+
+    pDH.batchSize = pDH.getDefaultBatchSize()
+    pDH.Record = make([]interface{},0)
 
     for _, f := range tableDetails["pk"].([]string) {
         pDH.projection[f] = nil
@@ -121,6 +126,36 @@ func NewPostgresDataHandler (dbh *sql.DB,
 
 func (pDH *postgresDataHandler) GetDMLStatement () (dmlstm string, dmlarg []interface{}) {
     return pDH.dmlStatement, pDH.dmlArguments
+}
+
+func (pDH *postgresDataHandler) getDefaultBatchSize () (rv uint) {
+    return 1000
+}
+
+func (pDH *postgresDataHandler) checkPrimaryKey () (err error) {
+    for _, pkf := range pDH.primaryKey {
+        found := false
+        for scf, _ := range pDH.searchCriteria {
+            if pkf == scf {
+                found = true
+                break
+            }
+        }
+
+        if !found {
+            return errors.New("All parts of the primary key must be provided")
+        }
+    }
+
+    return err
+}
+
+func (pDH *postgresDataHandler) SetBatchSize (b uint) {
+    if b == 0 {
+        pDH.batchSize = pDH.getDefaultBatchSize()
+    } else {
+        pDH.batchSize = b
+    }
 }
 
 func (pDH *postgresDataHandler) SetProjection (fieldList []string) {
@@ -140,9 +175,27 @@ func (pDH *postgresDataHandler) SetFindCriteria (findKeys map[string]interface{}
     return err
 }
 
-func (pDH *postgresDataHandler) FindRecord () (err error) {
+func (pDH *postgresDataHandler) FindRecord (args... string) (err error) {
     if pDH.dmlType != "" {
         return errors.New("Record is already staged for "+pDH.dmlType)
+    }
+
+    order_direction := "desc"
+
+    return_many := false
+    for _, flag := range args {
+        switch flag {
+            case "return_many":
+                return_many = true
+            case "reverse_sort":
+                order_direction = "asc"
+        }
+    }
+
+    if !return_many {
+        if err := pDH.checkPrimaryKey(); err != nil {
+            return err
+        }
     }
 
     proj := []string{}
@@ -151,19 +204,36 @@ func (pDH *postgresDataHandler) FindRecord () (err error) {
     }
 
     statement := bytes.NewBufferString("select ")
+
+    // Add the projection
     statement.WriteString(strings.Join(proj,","))
-    statement.WriteString(" from "+pDH.tableName+" where ")
 
-    placeholders := []string{}
+    statement.WriteString(" from "+pDH.tableName)
 
-    pc := int64(1)
-    for k, v := range pDH.searchCriteria {
-        placeholders = append(placeholders, k+"=$"+strconv.FormatInt(pc,10))
-        pDH.dmlArguments = append(pDH.dmlArguments, v)
-        pc += 1
+    // Process filtering crit
+    if len(pDH.searchCriteria) > 0 {
+        statement.WriteString(" where ")
+
+        placeholders := []string{}
+
+        pc := int64(1)
+        for k, v := range pDH.searchCriteria {
+            placeholders = append(placeholders, k+"=$"+strconv.FormatInt(pc,10))
+            pDH.dmlArguments = append(pDH.dmlArguments, v)
+            pc += 1
+        }
+
+        statement.WriteString(strings.Join(placeholders, " and "))
     }
 
-    statement.WriteString(strings.Join(placeholders, " and "))
+    // Process ordering crit
+    statement.WriteString(" order by")
+    for _, field := range pDH.primaryKey {
+        statement.WriteString(" "+field+" "+order_direction)
+    }
+
+    statement.WriteString(" limit "+fmt.Sprint(pDH.batchSize+1))
+
     pDH.dmlStatement = statement.String()
 
     rows, err := pDH.dbh.Query(pDH.dmlStatement, pDH.dmlArguments...)
@@ -175,7 +245,7 @@ func (pDH *postgresDataHandler) FindRecord () (err error) {
     columns, _ := rows.Columns()
     count := len(columns)
 
-    counter := 0
+    counter := uint(0)
     for rows.Next() {
         values := make([]interface{}, count)
         valuePtrs := make([]interface{}, count)
@@ -199,22 +269,114 @@ func (pDH *postgresDataHandler) FindRecord () (err error) {
             row[col] = v
         }
         counter += 1
+
+        if counter <= pDH.batchSize {
+            pDH.Record = append(pDH.Record, row)
+        }
     }
 
     pDH.NumAffectedLastOp = counter
     if counter > 0 {
-        pDH.Record = row
+        if counter > pDH.batchSize {
+            pDH.RecordNextIdx = make(map[string]interface{})
+            for _, field := range pDH.primaryKey {
+                pDH.RecordNextIdx[field] = row[field]
+            }
+        }
+
         pDH.RecordLastOp = row
     }
 
     return err
 }
 
-func (pDH *postgresDataHandler) UpdateRecord (args map[string]interface{}) (err error) {
+func (pDH *postgresDataHandler) ExecuteProc ( procName string,
+                                              procArgs []interface{},
+                                              args... string ) (err error) {
+
+    statement := bytes.NewBufferString("select "+procName+"(")
+    if procArgs != nil && len(procArgs) > 0 {
+        placeholders := []string{}
+        pc := int64(1)
+        for _, v := range procArgs {
+            placeholders = append(placeholders, "$"+strconv.FormatInt(pc,10))
+            pDH.dmlArguments = append(pDH.dmlArguments, v)
+            pc += 1
+        }
+        statement.WriteString(strings.Join(placeholders,","))
+    }
+    statement.WriteString(")")
+
+    pDH.dmlStatement = statement.String()
+
+    rows, err := pDH.dbh.Query(pDH.dmlStatement, pDH.dmlArguments...)
+    if err != nil {
+        return err
+    }
+
+    var row map[string]interface{}
+    columns, _ := rows.Columns()
+    count := len(columns)
+
+    counter := uint(0)
+    for rows.Next() {
+        values := make([]interface{}, count)
+        valuePtrs := make([]interface{}, count)
+        for i, _ := range columns {
+            valuePtrs[i] = &values[i]
+        }
+        rows.Scan(valuePtrs...)
+
+        row = make(map[string]interface{})
+
+        for i, col := range columns {
+            var v interface{}
+            val := values[i]
+            b, ok := val.([]byte)
+            if (ok) {
+                v = string(b)
+            } else {
+                v = val
+            }
+
+            row[col] = v
+        }
+        counter += 1
+
+        pDH.Record = append(pDH.Record, row)
+    }
+
+    pDH.NumAffectedLastOp = counter
+    if counter > 0 {
+        if counter > pDH.batchSize {
+            pDH.RecordNextIdx = make(map[string]interface{})
+            for _, field := range pDH.primaryKey {
+                pDH.RecordNextIdx[field] = row[field]
+            }
+        }   
+
+        pDH.RecordLastOp = row
+    }
+
     return err
 }
 
-func (pDH *postgresDataHandler) DeleteRecord (args map[string]interface{}) (err error) {
+// Allow an update of a single record
+func (pDH *postgresDataHandler) UpdateRecord ( replacement map[string]interface{},
+                                               args... string ) (err error) {
+    if err := pDH.checkPrimaryKey(); err != nil {
+        return err
+    }
+
+    return err
+}
+
+// Allow deletion of a single record
+func (pDH *postgresDataHandler) DeleteRecord ( args... string ) (err error) {
+    if err := pDH.checkPrimaryKey(); err != nil {
+        return err
+    }   
+
     return err
 }
 
@@ -266,7 +428,7 @@ func (pDH *postgresDataHandler) InsertRecord (record map[string]interface{}, arg
 
         var row map[string]interface{}
 
-        counter := 0
+        counter := uint(0)
         for rows.Next() {
             values := make([]interface{}, count)
             valuePtrs := make([]interface{}, count)
@@ -290,11 +452,18 @@ func (pDH *postgresDataHandler) InsertRecord (record map[string]interface{}, arg
                 row[col] = v
             }
             counter += 1
+
+            pDH.Record = append(pDH.Record, row)
         }
 
         pDH.NumAffectedLastOp = counter
         if counter > 0 {
-            pDH.Record = row
+            if counter > pDH.batchSize {
+                pDH.RecordNextIdx = make(map[string]interface{})
+                for _, field := range pDH.primaryKey {
+                    pDH.RecordNextIdx[field] = row[field]
+                }
+            }
             pDH.RecordLastOp = row
         }
     } else {
